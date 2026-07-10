@@ -1,131 +1,106 @@
 const std = @import("std");
-const posix = std.posix;
+const Io = std.Io;
 const elf = std.elf;
-
-const emu = @import("emu.zig");
-const VM = emu.VM;
 
 const allocator = std.heap.page_allocator;
 
-pub fn main() !void {
-    const page_size: u64 = 4096;
-    const stack_size: u64 = page_size * 16;
-    const base_addr: u64 = stack_size;
+const emu = @import("emu.zig");
 
-    const file = try std.fs.cwd().openFile("programs/tst/zig-out/lib/libtst.so", .{});
-    defer file.close();
+fn add(a: i32, b: i32) i32 {
+    return a *% 69 +% b;
+}
 
-    const stat = try file.stat();
-    const file_size = std.math.cast(usize, stat.size) orelse return error.FileTooBig;
+pub fn formatHex(value: i64, w: *Io.Writer) Io.Writer.Error!void {
+    return w.print("{s}0x{X}", .{ if (value < 0) "-" else "", @abs(value) });
+}
 
-    const file_bytes = try posix.mmap(
+pub fn fmtHex(value: i64) std.fmt.Alt(i64, formatHex) {
+    return .{ .data = value };
+}
+
+pub fn main(init: std.process.Init) !void {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    _ = &gpa;
+    _ = &io;
+
+    const cwd = Io.Dir.cwd();
+    const file_bytes = try cwd.readFileAllocOptions(
+        io,
+        "zig-out/lib/libtst.so",
+        gpa,
+        .unlimited,
+        .fromByteUnits(emu.page_size),
         null,
-        (file_size + page_size - 1) & -%page_size,
-        posix.PROT.READ,
-        .{ .TYPE = .PRIVATE },
-        file.handle,
-        0,
     );
-    defer posix.munmap(file_bytes);
+    defer gpa.free(file_bytes);
 
-    const eh = @as(*elf.Elf64_Ehdr, @ptrCast(file_bytes.ptr));
-    if (!std.mem.eql(u8, eh.e_ident[0..4], elf.MAGIC)) return error.NotElfFile;
-    if (eh.e_type != elf.ET.DYN) return error.NotDynamicLibrary;
+    const eh: *const elf.Elf64.Ehdr = @ptrCast(file_bytes.ptr);
+    if (@as(u32, @bitCast(eh.ident.magic)) != @as(u32, @bitCast(@as(*const [4]u8, elf.MAGIC).*))) return error.NotElfFile;
+    if (eh.type != .DYN) return error.NotDynamicLibrary;
 
-    // Iterate over the program header entries to find out the
-    // dynamic vector as well as the total size of the virtual memory.
-    var memory_end: usize = 0;
+    const memory = try gpa.alignedAlloc(u8, .fromByteUnits(emu.page_size), 16 * 1024 * 1024);
+    defer gpa.free(memory);
 
-    {
-        var i: usize = 0;
-        var ph_addr: [*]u8 = file_bytes.ptr + eh.e_phoff;
-        while (i < eh.e_phnum) : ({
-            i += 1;
-            ph_addr += eh.e_phentsize;
-        }) {
-            const ph: *elf.Elf64_Phdr = @ptrCast(@alignCast(ph_addr));
-            switch (ph.p_type) {
-                elf.PT_LOAD => memory_end = @max(memory_end, ph.p_paddr + ph.p_memsz),
-                else => {},
+    const memory_base = 1024 * 1024;
+    const stack_base = memory_base / 2;
+
+    const phdr_ptr: [*]const elf.Elf64.Phdr = @ptrCast(@alignCast(file_bytes.ptr + eh.phoff));
+    const phdrs = phdr_ptr[0..eh.phnum];
+
+    for (phdrs) |phdr| {
+        if (phdr.type == .LOAD and phdr.flags.X) {
+            const exec_bytes = file_bytes[phdr.offset .. phdr.offset + phdr.filesz];
+            const insts: []const u32 = @ptrCast(@alignCast(exec_bytes));
+            for (insts) |raw| {
+                const inst = emu.Inst{ .raw = raw };
+                std.debug.print("    {f}\n", .{inst});
             }
         }
-    }
 
-    memory_end = (memory_end + page_size - 1) & -%page_size;
-    memory_end += base_addr;
+        if (phdr.type == .LOAD) {
+            const target_vaddr = phdr.vaddr;
 
-    const memory = try posix.mmap(
-        null,
-        memory_end,
-        posix.PROT.READ | posix.PROT.WRITE,
-        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-        -1,
-        0,
-    );
-
-    @memset(memory, 0);
-
-    const binary = memory[base_addr..];
-    var maybe_dynv: ?[*]usize = null;
-
-    {
-        var i: usize = 0;
-        var ph_addr: [*]u8 = file_bytes.ptr + eh.e_phoff;
-        while (i < eh.e_phnum) : ({
-            i += 1;
-            ph_addr += eh.e_phentsize;
-        }) {
-            const ph: *elf.Elf64_Phdr = @ptrCast(@alignCast(ph_addr));
-            switch (ph.p_type) {
-                elf.PT_LOAD => @memcpy(binary[ph.p_paddr..][0..ph.p_filesz], file_bytes[ph.p_offset..][0..ph.p_filesz]),
-                elf.PT_DYNAMIC => maybe_dynv = @ptrCast(@alignCast(binary.ptr + ph.p_paddr)),
-                else => {},
-            }
+            const file_data = file_bytes[phdr.offset..][0..phdr.filesz];
+            @memcpy(memory[memory_base + target_vaddr ..][0..file_data.len], file_data);
+            @memset(memory[memory_base + target_vaddr + phdr.filesz ..][0 .. phdr.memsz - phdr.filesz], 0);
         }
     }
 
-    const dynv = maybe_dynv orelse return error.MissingDynamicLinkingInformation;
+    const shdrs = @as([*]const elf.Elf64.Shdr, @ptrCast(@alignCast(file_bytes.ptr + eh.shoff)))[0..eh.shnum];
 
-    var maybe_strings: ?[*:0]u8 = null;
-    var maybe_syms: ?[*]elf.Elf64_Sym = null;
+    var syms: []const elf.Elf64.Sym = &.{};
+    var strtab: []const u8 = &.{};
 
-    {
-        var i: usize = 0;
-        while (dynv[i] != 0) : (i += 2) {
-            const p = binary.ptr + dynv[i + 1];
-            switch (dynv[i]) {
-                elf.DT_STRTAB => maybe_strings = @ptrCast(p),
-                elf.DT_SYMTAB => maybe_syms = @ptrCast(@alignCast(p)),
-                else => {},
-            }
+    for (shdrs) |shdr| {
+        if (shdr.type == .DYNSYM) {
+            const syms_ptr = @as([*]const elf.Elf64.Sym, @ptrCast(@alignCast(file_bytes.ptr + shdr.offset)));
+            const num_syms = shdr.size / @sizeOf(elf.Elf64.Sym);
+            syms = syms_ptr[0..num_syms];
+
+            const str_shdr = shdrs[shdr.link];
+            strtab = file_bytes[str_shdr.offset .. str_shdr.offset + str_shdr.size];
+            break;
         }
     }
 
-    const strings = maybe_strings orelse return error.ElfStringSectionNotFound;
-    const syms = maybe_syms orelse return error.ElfSymSectionNotFound;
+    var sym_vaddr: usize = undefined;
 
-    const sym_table_size = @intFromPtr(strings) - @intFromPtr(syms);
-    const sym_count = sym_table_size / @sizeOf(elf.Elf64_Sym);
+    for (syms) |sym| {
+        if (sym.name == 0) continue;
 
-    var function_map: std.StringHashMapUnmanaged(u64) = .empty;
-    for (syms[0..sym_count]) |sym| {
-        if (sym.st_type() == elf.STT_FUNC) {
-            const name = std.mem.sliceTo(strings[sym.st_name..], 0);
-            const func_addr = base_addr + sym.st_value;
-            try function_map.put(allocator, name, func_addr);
+        var end: usize = sym.name;
+        while (end < strtab.len and strtab[end] != 0) : (end += 1) {}
+        const sym_name = strtab[sym.name..end];
+
+        if (sym.info.type == .FUNC and std.mem.eql(u8, sym_name, "init")) {
+            sym_vaddr = sym.value;
+            break;
         }
     }
 
-    var vm = VM{ .memory = memory, .pc = 0 };
-
-    const func_addr = function_map.get("init") orelse return error.FunctionNotFound;
-
-    vm.pc = @bitCast(func_addr);
-
-    vm.setInt(.sp, base_addr);
-
-    var timer = try std.time.Timer.start();
-    try vm.eval();
-    const elapsed = timer.read();
-    std.debug.print("elapsed: {D}\n", .{elapsed});
+    var vm = emu.VM{ .memory = memory, .pc = 0, .base = memory_base };
+    vm.set(u64, .sp, stack_base);
+    try vm.run(memory_base + sym_vaddr);
 }
