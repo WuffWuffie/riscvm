@@ -284,12 +284,12 @@ pub const VM = struct {
     pub inline fn get(self: *VM, comptime T: type, reg: Reg) T {
         return switch (T) {
             i8, u8, i16, u16, i32, u32, i64, u64 => {
-                const val = self.int_regs[@intFromEnum(reg)];
+                const val = self.int_regs[@backingInt(reg)];
                 if (debug and reg != .x0) std.debug.print("{t} is {f}\n", .{ reg, dis.fmtHex(val.i64) });
                 return @field(val, @typeName(T));
             },
             f32, f64 => {
-                const val = @field(self.flt_regs[@intFromEnum(reg)], @typeName(T));
+                const val = @field(self.flt_regs[@backingInt(reg)], @typeName(T));
                 if (debug) std.debug.print("{t} is {}\n", .{ reg, val });
                 return val;
             },
@@ -301,11 +301,11 @@ pub const VM = struct {
         switch (T) {
             i64, u64 => {
                 if (debug and reg != .x0) std.debug.print("{t} = {f}\n", .{ reg, dis.fmtHex(@bitCast(value)) });
-                @field(self.int_regs[@intFromEnum(reg)], @typeName(T)) = if (reg != .x0) value else 0;
+                @field(self.int_regs[@backingInt(reg)], @typeName(T)) = if (reg != .x0) value else 0;
             },
             f32, f64 => {
-                if (debug) std.debug.print("{t} = {}\n", .{ @as(FltReg, @enumFromInt(@intFromEnum(reg))), value });
-                @field(self.flt_regs[@intFromEnum(reg)], @typeName(T)) = value;
+                if (debug) std.debug.print("{t} = {}\n", .{ @as(FltReg, @fromBackingInt(@backingInt(reg))), value });
+                @field(self.flt_regs[@backingInt(reg)], @typeName(T)) = value;
             },
             else => @compileError("unsupported type: " ++ @typeName(T)),
         }
@@ -349,7 +349,7 @@ pub const VM = struct {
     pub fn dumpIntRegs(self: *VM) void {
         for (self.int_regs, 0..) |reg, i| {
             if (i > 0) std.debug.print(", ", .{});
-            std.debug.print("{t} = {f}", .{ @as(Reg, @enumFromInt(i)), dis.fmtHex(reg.i64) });
+            std.debug.print("{t} = {f}", .{ @as(Reg, @fromBackingInt(@intCast(i))), dis.fmtHex(reg.i64) });
         }
         std.debug.print("\n", .{});
     }

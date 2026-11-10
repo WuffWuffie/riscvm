@@ -723,28 +723,28 @@ pub fn @"fcvt.w.s"(vm: *VM, inst: Inst) !void {
     vm.pc +%= 4;
     const rd = inst.r.rd;
     const rs1 = vm.get(f32, inst.r.rs1);
-    vm.set(i64, rd, @as(i32, @intFromFloat(rs1)));
+    vm.set(i64, rd, @as(i32, @trunc(rs1)));
 }
 
 pub fn @"fcvt.wu.s"(vm: *VM, inst: Inst) !void {
     vm.pc +%= 4;
     const rd = inst.r.rd;
     const rs1 = vm.get(f32, inst.r.rs1);
-    vm.set(i64, rd, @as(i32, @bitCast(@as(u32, @intFromFloat(rs1)))));
+    vm.set(i64, rd, @as(i32, @bitCast(@as(u32, @trunc(rs1)))));
 }
 
 pub fn @"fcvt.l.s"(vm: *VM, inst: Inst) !void {
     vm.pc +%= 4;
     const rd = inst.r.rd;
     const rs1 = vm.get(f32, inst.r.rs1);
-    vm.set(i64, rd, @intFromFloat(rs1));
+    vm.set(i64, rd, @trunc(rs1));
 }
 
 pub fn @"fcvt.lu.s"(vm: *VM, inst: Inst) !void {
     vm.pc +%= 4;
     const rd = inst.r.rd;
     const rs1 = vm.get(f32, inst.r.rs1);
-    vm.set(u64, rd, @intFromFloat(rs1));
+    vm.set(u64, rd, @trunc(rs1));
 }
 
 pub fn @"fcvt.s.w"(vm: *VM, inst: Inst) !void {
@@ -922,28 +922,28 @@ pub fn @"fcvt.w.d"(vm: *VM, inst: Inst) !void {
     vm.pc +%= 4;
     const rd = inst.r.rd;
     const rs1 = vm.get(f64, inst.r.rs1);
-    vm.set(i64, rd, @as(i32, @intFromFloat(rs1)));
+    vm.set(i64, rd, @as(i32, @trunc(rs1)));
 }
 
 pub fn @"fcvt.wu.d"(vm: *VM, inst: Inst) !void {
     vm.pc +%= 4;
     const rd = inst.r.rd;
     const rs1 = vm.get(f64, inst.r.rs1);
-    vm.set(i64, rd, @as(i32, @bitCast(@as(u32, @intFromFloat(rs1)))));
+    vm.set(i64, rd, @as(i32, @bitCast(@as(u32, @trunc(rs1)))));
 }
 
 pub fn @"fcvt.l.d"(vm: *VM, inst: Inst) !void {
     vm.pc +%= 4;
     const rd = inst.r.rd;
     const rs1 = vm.get(f64, inst.r.rs1);
-    vm.set(i64, rd, @intFromFloat(rs1));
+    vm.set(i64, rd, @trunc(rs1));
 }
 
 pub fn @"fcvt.lu.d"(vm: *VM, inst: Inst) !void {
     vm.pc +%= 4;
     const rd = inst.r.rd;
     const rs1 = vm.get(f64, inst.r.rs1);
-    vm.set(u64, rd, @intFromFloat(rs1));
+    vm.set(u64, rd, @trunc(rs1));
 }
 
 pub fn @"fcvt.d.w"(vm: *VM, inst: Inst) !void {
